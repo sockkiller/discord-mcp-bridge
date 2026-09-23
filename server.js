@@ -139,6 +139,62 @@ function buildServer() {
     }
   );
 
+  server.registerTool(
+    "post_message",
+    {
+      title: "Post a message to a channel",
+      description:
+        "Post a message to a Discord text channel as the bot. Long messages are automatically split into multiple posts (Discord's 2000-character limit per message).",
+      inputSchema: {
+        channelId: z.string().describe("The Discord channel id to post into, from list_channels"),
+        content: z.string().describe("The message text to post")
+      }
+    },
+    async ({ channelId, content }) => {
+      const MAX = 1900; // leave headroom under Discord's 2000-char hard limit
+      const chunks = [];
+      let remaining = content;
+      while (remaining.length > 0) {
+        if (remaining.length <= MAX) {
+          chunks.push(remaining);
+          break;
+        }
+        // Prefer to break on the last newline before the limit, so we don't cut mid-sentence.
+        let splitAt = remaining.lastIndexOf("\n", MAX);
+        if (splitAt <= 0) splitAt = MAX;
+        chunks.push(remaining.slice(0, splitAt));
+        remaining = remaining.slice(splitAt);
+      }
+
+      const posted = [];
+      for (const chunk of chunks) {
+        const res = await fetch(`${DISCORD_API}/channels/${channelId}/messages`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bot ${DISCORD_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ content: chunk })
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`Discord API ${res.status} ${res.statusText} posting message: ${text}`);
+        }
+        const data = await res.json();
+        posted.push({ id: data.id });
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ posted_messages: posted.length, message_ids: posted.map((p) => p.id) }, null, 2)
+          }
+        ]
+      };
+    }
+  );
+
   return server;
 }
 
